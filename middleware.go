@@ -245,3 +245,48 @@ func Gzip(h http.Handler) http.Handler {
 		h.ServeHTTP(gzw, r)
 	})
 }
+
+type responseRecorder struct {
+	http.ResponseWriter
+	statusCode int
+	bytesSent  int64
+}
+
+func (r *responseRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *responseRecorder) Write(buf []byte) (int, error) {
+	n, err := r.ResponseWriter.Write(buf)
+	r.bytesSent += int64(n)
+	return n, err
+}
+
+// AccessLog logs detailed information about each request, including the HTTP method,
+// path, status code, number of bytes sent, etc.
+//
+// Note: this middleware should be applied as the outermost (i.e., last in the chain).
+// Despite being applied last, it will be executed first.
+func AccessLog(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Wrap the ResponseWriter to capture status code and bytes sent.
+		rr := &responseRecorder{w, http.StatusOK, 0}
+
+		h.ServeHTTP(rr, r)
+
+		slog := SlogFromContext(r.Context())
+		slog.Info(
+			fmt.Sprintf("%s %s %d", r.Method, r.URL.Path, rr.statusCode),
+			"remote_addr", r.RemoteAddr,
+			"host", r.Host,
+			"method", r.Method,
+			"path", r.URL.Path,
+			"proto", r.Proto,
+			"status_code", rr.statusCode,
+			"bytes_sent", rr.bytesSent,
+			"referer", r.Header.Get("Referer"),
+			"user_agent", r.UserAgent(),
+		)
+	})
+}
