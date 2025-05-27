@@ -35,7 +35,7 @@ var HMACSigningMethods = []string{
 // a JSON error is returned to the client.
 //
 // Note: human-memorizable passwords must not be directly used as the secret.
-func JWTSubject(h http.Handler, secret []byte, validMethods []string) http.Handler {
+func JWTSubject(h http.Handler, secret []byte, issuer string, validMethods []string) http.Handler {
 	parser := &jwt.Parser{
 		ValidMethods: validMethods,
 	}
@@ -80,16 +80,20 @@ func JWTSubject(h http.Handler, secret []byte, validMethods []string) http.Handl
 		// during parsing, but unfortunately, they are treated as optional, so
 		// we manually validate these as required.
 		switch now := time.Now().Unix(); {
-		case claims.VerifyExpiresAt(now, true) == false:
+		case !claims.VerifyExpiresAt(now, true):
 			SlogFromContext(r.Context()).Error("token is expired", "exp", time.Unix(claims.ExpiresAt, 0).Format(time.RFC3339))
 			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
 			return
-		case claims.VerifyIssuedAt(now, true) == false:
+		case !claims.VerifyIssuedAt(now, true):
 			SlogFromContext(r.Context()).Error("token used before issued", "iat", time.Unix(claims.IssuedAt, 0).Format(time.RFC3339))
 			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
 			return
-		case claims.VerifyNotBefore(now, true) == false:
+		case !claims.VerifyNotBefore(now, true):
 			SlogFromContext(r.Context()).Error("token is not valid yet", "nbf", time.Unix(claims.NotBefore, 0).Format(time.RFC3339))
+			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
+			return
+		case !claims.VerifyIssuer(issuer, true):
+			SlogFromContext(r.Context()).Error("token has not been issued by us", "iss", claims.Issuer)
 			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
