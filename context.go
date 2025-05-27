@@ -35,11 +35,11 @@ func newContextWithJWTClaimSubject(ctx context.Context, userID uuid.UUID) contex
 	return context.WithValue(ctx, jwtClaimSubjectContextKey, userID)
 }
 
-// JWTClaimSubjectFromContext returns the parsed claim subject.
+// JWTSubjectFromContext returns the parsed claim subject.
 //
 // If the middleware has not been applied or if the subject is not
 // a valid UUID - the nil UUID is returned.
-func JWTClaimSubjectFromContext(ctx context.Context) uuid.UUID {
+func JWTSubjectFromContext(ctx context.Context) uuid.UUID {
 	userID, ok := ctx.Value(jwtClaimSubjectContextKey).(uuid.UUID)
 	if ok {
 		return userID

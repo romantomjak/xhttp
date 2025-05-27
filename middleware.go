@@ -10,41 +10,58 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/google/uuid"
 )
 
-// JWTClaimSubject parses JWT token from the Authorization header.
+const (
+	SigningMethodHS256 = "HS256"
+	SigningMethodHS384 = "HS384"
+	SigningMethodHS512 = "HS512"
+)
+
+var HMACSigningMethods = []string{
+	SigningMethodHS256,
+	SigningMethodHS384,
+	SigningMethodHS512,
+}
+
+// JWTSubject parses JWT token from the Authorization header.
 //
 // The claim subject is parsed as a UUID and added to the request context.
 // If the token is missing or invalid, the request handling is stopped and
 // a JSON error is returned to the client.
-func JWTClaimSubject(h http.Handler, jwtSecret []byte) http.Handler {
+//
+// Note: human-memorizable passwords must not be directly used as the secret.
+func JWTSubject(h http.Handler, secret []byte, validMethods []string) http.Handler {
+	parser := &jwt.Parser{
+		ValidMethods: validMethods,
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
+		header := strings.TrimSpace(r.Header.Get("Authorization"))
 		if header == "" {
 			SlogFromContext(r.Context()).Error("missing authorization header")
 			writeJSONError(w, r, http.StatusUnauthorized, "Authorization token required")
 			return
 		}
 
-		authHeaderParts := strings.Fields(header)
-		if len(authHeaderParts) != 2 || strings.ToLower(authHeaderParts[0]) != "bearer" {
-			slog := SlogFromContext(r.Context())
-			slog.Error("invalid authorization type", "type", authHeaderParts[0])
-
-			w.Header().Add("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error": "Authorization type must be Bearer"}`))
+		parts := strings.Fields(header)
+		if len(parts) != 2 {
+			SlogFromContext(r.Context()).Error("invalid authorization header format")
+			writeJSONError(w, r, http.StatusUnauthorized, "Authorization header must be in the format: Bearer <token>")
+			return
+		}
+		if strings.ToLower(parts[0]) != "bearer" {
+			SlogFromContext(r.Context()).Error("invalid authorization type", "type", parts[0])
+			writeJSONError(w, r, http.StatusUnauthorized, "Authorization type must be Bearer")
 			return
 		}
 
-		token, err := jwt.ParseWithClaims(authHeaderParts[1], &jwt.StandardClaims{}, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %q", token.Header["alg"])
-			}
-			return jwtSecret, nil
+		// Signing method and signature verification is handled by the parser.
+		token, err := parser.ParseWithClaims(parts[1], new(jwt.StandardClaims), func(token *jwt.Token) (any, error) {
+			return secret, nil
 		})
 		if err != nil {
 			SlogFromContext(r.Context()).Error("parse authorization token", "err", err)
@@ -54,12 +71,26 @@ func JWTClaimSubject(h http.Handler, jwtSecret []byte) http.Handler {
 
 		claims, ok := token.Claims.(*jwt.StandardClaims)
 		if !ok {
-			slog := SlogFromContext(r.Context())
-			slog.Error("invalid jwt claims", "err", err)
+			SlogFromContext(r.Context()).Error(fmt.Sprintf("cannot assert %T as jwt.StandardClaims", token.Claims))
+			writeJSONError(w, r, http.StatusUnauthorized, "Invalid token claims")
+			return
+		}
 
-			w.Header().Add("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error": "Invalid token claims"}`))
+		// Time based claims such as exp, iat, nbf have already been validated
+		// during parsing, but unfortunately, they are treated as optional, so
+		// we manually validate these as required.
+		switch now := time.Now().Unix(); {
+		case claims.VerifyExpiresAt(now, true) == false:
+			SlogFromContext(r.Context()).Error("token is expired", "exp", time.Unix(claims.ExpiresAt, 0).Format(time.RFC3339))
+			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
+			return
+		case claims.VerifyIssuedAt(now, true) == false:
+			SlogFromContext(r.Context()).Error("token used before issued", "iat", time.Unix(claims.IssuedAt, 0).Format(time.RFC3339))
+			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
+			return
+		case claims.VerifyNotBefore(now, true) == false:
+			SlogFromContext(r.Context()).Error("token is not valid yet", "nbf", time.Unix(claims.NotBefore, 0).Format(time.RFC3339))
+			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
 
