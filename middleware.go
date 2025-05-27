@@ -24,9 +24,7 @@ func JWTClaimSubject(h http.Handler, jwtSecret []byte) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
 		if header == "" {
-			slog := SlogFromContext(r.Context())
-			slog.Error("empty authorization header")
-
+			SlogFromContext(r.Context()).Error("missing authorization header")
 			writeJSONError(w, r, http.StatusUnauthorized, "Authorization token required")
 			return
 		}
@@ -49,9 +47,7 @@ func JWTClaimSubject(h http.Handler, jwtSecret []byte) http.Handler {
 			return jwtSecret, nil
 		})
 		if err != nil {
-			slog := SlogFromContext(r.Context())
-			slog.Error("invalid jwt token", "err", err)
-
+			SlogFromContext(r.Context()).Error("parse authorization token", "err", err)
 			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
@@ -69,9 +65,7 @@ func JWTClaimSubject(h http.Handler, jwtSecret []byte) http.Handler {
 
 		subject, err := uuid.Parse(claims.Subject)
 		if err != nil {
-			slog := SlogFromContext(r.Context())
-			slog.Error("parse jwt claims subject", "err", err)
-
+			SlogFromContext(r.Context()).Error("parse token subject as uuid", "subject", claims.Subject, "err", err)
 			writeJSONError(w, r, http.StatusUnauthorized, "Invalid token subject")
 			return
 		}
@@ -270,8 +264,7 @@ func AccessLog(h http.Handler) http.Handler {
 
 		h.ServeHTTP(rr, r)
 
-		slog := SlogFromContext(r.Context())
-		slog.Info(
+		SlogFromContext(r.Context()).Info(
 			fmt.Sprintf("%s %s %d", r.Method, r.URL.Path, rr.statusCode),
 			"remote_addr", r.RemoteAddr,
 			"host", r.Host,
