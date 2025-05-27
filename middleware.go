@@ -2,6 +2,7 @@ package xhttp
 
 import (
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,9 +27,7 @@ func JWTClaimSubject(h http.Handler, jwtSecret []byte) http.Handler {
 			slog := SlogFromContext(r.Context())
 			slog.Error("empty authorization header")
 
-			w.Header().Add("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error": "Missing authorization token"}`))
+			writeJSONError(w, r, http.StatusUnauthorized, "Authorization token required")
 			return
 		}
 
@@ -53,9 +52,7 @@ func JWTClaimSubject(h http.Handler, jwtSecret []byte) http.Handler {
 			slog := SlogFromContext(r.Context())
 			slog.Error("invalid jwt token", "err", err)
 
-			w.Header().Add("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error": "Invalid or expired token"}`))
+			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
 
@@ -75,9 +72,7 @@ func JWTClaimSubject(h http.Handler, jwtSecret []byte) http.Handler {
 			slog := SlogFromContext(r.Context())
 			slog.Error("parse jwt claims subject", "err", err)
 
-			w.Header().Add("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error": "Invalid claims subject"}`))
+			writeJSONError(w, r, http.StatusUnauthorized, "Invalid token subject")
 			return
 		}
 
@@ -183,7 +178,7 @@ func Slog(h http.Handler) http.Handler {
 		id, err := uuid.NewRandom()
 		if err != nil {
 			slog.Error("new request id", "err", err)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			writeJSONError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 			return
 		}
 
@@ -289,4 +284,22 @@ func AccessLog(h http.Handler) http.Handler {
 			"user_agent", r.UserAgent(),
 		)
 	})
+}
+
+// writeJSONError is a helper to send a JSON error response to client.
+func writeJSONError(w http.ResponseWriter, r *http.Request, status int, message string) {
+	h := w.Header()
+
+	// Delete the Content-Length header, which might be for some other content.
+	h.Del("Content-Length")
+
+	// There might be content type already set, but we reset it to
+	// application/json for the error message.
+	h.Set("Content-Type", "application/json")
+
+	w.WriteHeader(status)
+
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+		SlogFromContext(r.Context()).Error("write json error response", "err", err)
+	}
 }
