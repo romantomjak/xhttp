@@ -35,7 +35,7 @@ var HMACSigningMethods = []string{
 // a JSON error is returned to the client.
 //
 // Note: human-memorizable passwords must not be directly used as the secret.
-func JWTSubject(h http.Handler, secret []byte, issuer string, validMethods []string) http.Handler {
+func JWTSubject(h http.Handler, issuer string, audience string, secret []byte, validMethods []string) http.Handler {
 	parser := &jwt.Parser{
 		ValidMethods: validMethods,
 	}
@@ -94,6 +94,10 @@ func JWTSubject(h http.Handler, secret []byte, issuer string, validMethods []str
 			return
 		case !claims.VerifyIssuer(issuer, true):
 			SlogFromContext(r.Context()).Error("token has not been issued by us", "iss", claims.Issuer)
+			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
+			return
+		case !claims.VerifyAudience(audience, true):
+			SlogFromContext(r.Context()).Error("token is not intended for us", "aud", claims.Audience)
 			writeJSONError(w, r, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
